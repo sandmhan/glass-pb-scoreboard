@@ -1,0 +1,96 @@
+name: Release APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+
+      - name: Install Android SDK components
+        run: sdkmanager 'platforms;android-34' 'build-tools;34.0.0'
+
+      - name: Restore release keystore
+        env:
+          SIGNING_KEY_BASE64: ${{ secrets.ANDROID_SIGNING_KEY_BASE64 }}
+        run: |
+          test -n "$SIGNING_KEY_BASE64"
+          printf '%s' "$SIGNING_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/release.keystore"
+          chmod 600 "$RUNNER_TEMP/release.keystore"
+
+      - name: Test, lint, and build signed APK
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/release.keystore
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: ./gradlew testDebugUnitTest lintRelease assembleRelease
+
+      - name: Verify release identity and compatibility
+        env:
+          EXPECTED_SIGNER_SHA256: 7d84a993db77ef47bbee7241808f15901a4d482a230ac4c71d99c2cf519c48df
+        run: |
+          set -euo pipefail
+          APK=app/build/outputs/apk/release/app-release.apk
+          TAG="$GITHUB_REF_NAME"
+
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]] || {
+            echo "Release tag is not SemVer: $TAG" >&2
+            exit 1
+          }
+
+          VERSION=$(python3 -c 'import json; print(json.load(open("app/build/outputs/apk/release/output-metadata.json"))["elements"][0]["versionName"])')
+          VERSION_CODE=$(python3 -c 'import json; print(json.load(open("app/build/outputs/apk/release/output-metadata.json"))["elements"][0]["versionCode"])')
+          [[ "$VERSION_CODE" =~ ^[1-9][0-9]*$ ]]
+          test "$TAG" = "v$VERSION" || {
+            echo "Tag $TAG does not match APK version v$VERSION" >&2
+            exit 1
+          }
+
+          APKSIGNER="$ANDROID_HOME/build-tools/34.0.0/apksigner"
+          AAPT="$ANDROID_HOME/build-tools/34.0.0/aapt"
+          "$APKSIGNER" verify --verbose "$APK"
+          ACTUAL_SIGNER=$($APKSIGNER verify --print-certs "$APK" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')
+          test "$ACTUAL_SIGNER" = "$EXPECTED_SIGNER_SHA256" || {
+            echo "Unexpected APK signer: $ACTUAL_SIGNER" >&2
+            exit 1
+          }
+
+          "$AAPT" dump badging "$APK" | grep -q "package: name='com.glasspb.scoreboard' versionCode='$VERSION_CODE' versionName='$VERSION'"
+          ! "$AAPT" dump permissions "$APK" | grep -q 'android.permission.INTERNET'
+
+      - name: Prepare release artifacts
+        run: |
+          cp app/build/outputs/apk/release/app-release.apk glass-pb-scoreboard.apk
+          sha256sum glass-pb-scoreboard.apk > SHA256SUMS
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" glass-pb-scoreboard.apk SHA256SUMS --clobber
+          else
+            gh release create "$TAG" glass-pb-scoreboard.apk SHA256SUMS \
+              --title "Glass Pickleball Scoreboard $TAG" \
+              --generate-notes \
+              --verify-tag
+          fi

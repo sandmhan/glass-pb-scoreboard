@@ -1,0 +1,61 @@
+plugins { id 'com.android.application' }
+
+def signingValues = [
+        path: System.getenv('ANDROID_KEYSTORE_PATH'),
+        storePassword: System.getenv('ANDROID_KEYSTORE_PASSWORD'),
+        keyAlias: System.getenv('ANDROID_KEY_ALIAS'),
+        keyPassword: System.getenv('ANDROID_KEY_PASSWORD')
+]
+def signingConfigured = signingValues.values().every { it != null && !it.isEmpty() }
+def signingPartiallyConfigured = signingValues.values().any { it != null && !it.isEmpty() }
+if (signingPartiallyConfigured && !signingConfigured) {
+    throw new GradleException('All ANDROID_KEYSTORE_* and ANDROID_KEY_* signing variables must be set together')
+}
+
+android {
+    namespace 'com.glasspb.scoreboard'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.glasspb.scoreboard'
+        minSdk 19
+        targetSdk 22
+        versionCode 1
+        versionName '1.0.0'
+        testInstrumentationRunner 'android.test.InstrumentationTestRunner'
+    }
+
+    signingConfigs {
+        release {
+            if (signingConfigured) {
+                storeFile file(signingValues.path)
+                storePassword signingValues.storePassword
+                keyAlias signingValues.keyAlias
+                keyPassword signingValues.keyPassword
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            if (signingConfigured) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+
+    buildFeatures { buildConfig true }
+
+    lint {
+        disable 'ExpiredTargetSdkVersion'
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}
+
+dependencies {
+    testImplementation 'junit:junit:4.13.2'
+}
