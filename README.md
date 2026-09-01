@@ -100,27 +100,27 @@ adb shell am start -n com.glasspb.scoreboard/.MainActivity
 
 For an existing installation, `adb install -r` retains an active game as long as the APK is signed by the same release key.
 
-## Build from source
+## Reproducible development environment
 
-### Prerequisites
+The supported development and CI environment is defined by [`flake.nix`](flake.nix) and pinned by [`flake.lock`](flake.lock). It supplies JDK 17, Android SDK Platform 34, Build Tools 34.0.0, platform tools/ADB, Python, and the Nix formatting and lint tools. The shell also configures the Nix-compatible AAPT2 executable and generates the ignored `local.properties` file.
 
-- JDK 17
-- Android SDK Platform 34
-- Android SDK Build Tools 34.0.0 or newer
-- Git
+### Prerequisite
 
-The project uses its checked-in Gradle 8.9 wrapper and downloads Android Gradle Plugin 8.7.3 automatically.
+- [Nix](https://nixos.org/download/) with flakes enabled on x86_64 Linux
+
+### Enter the shell and build
 
 ```bash
 git clone https://github.com/sandmhan/glass-pb-scoreboard.git
 cd glass-pb-scoreboard
+nix develop
+scripts/check
+```
 
-# Point Gradle at your Android SDK if ANDROID_HOME is not already set.
-printf 'sdk.dir=%s\n' "$ANDROID_HOME" > local.properties
+Or run the complete test, lint, and APK build without entering an interactive shell:
 
-./gradlew testDebugUnitTest
-./gradlew lintDebug
-./gradlew assembleDebug
+```bash
+nix develop --command scripts/check
 ```
 
 Debug APK:
@@ -128,6 +128,14 @@ Debug APK:
 ```text
 app/build/outputs/apk/debug/app-debug.apk
 ```
+
+If you use direnv with nix-direnv, `.envrc` makes setup automatic:
+
+```bash
+direnv allow
+```
+
+The checked-in Gradle 8.9 wrapper, its distribution checksum, Android Gradle Plugin 8.7.3, Gradle dependency checksum metadata, and the locked Nixpkgs revision complete the toolchain pinning.
 
 ### Build a signed release
 
@@ -139,7 +147,7 @@ export ANDROID_KEYSTORE_PASSWORD='...'
 export ANDROID_KEY_ALIAS='...'
 export ANDROID_KEY_PASSWORD='...'
 
-./gradlew testDebugUnitTest lintRelease assembleRelease
+nix develop --command scripts/check
 ```
 
 Signed APK:
@@ -155,7 +163,9 @@ Without all four signing variables, Gradle intentionally produces an unsigned re
 The JVM suite covers the pure match engine, UI navigation reducer, persistence codec, persistence failure atomicity, and raw gesture recognizer:
 
 ```bash
-./gradlew testDebugUnitTest lintDebug lintRelease assembleDebug assembleRelease
+nix flake check
+nix develop --command scripts/check
+nix develop --command bash -c 'deadnix --fail . && statix check .'
 ```
 
 Version 1.0.0 has **67 passing tests** and no lint findings. Physical validation on Glass includes full singles and doubles games, deuce, undo, reset safety, process recovery, reboot recovery, offline operation, malformed-state recovery, and raw touch input. See [the device validation record](docs/device-validation.md).

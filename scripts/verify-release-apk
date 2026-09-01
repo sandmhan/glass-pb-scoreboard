@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -ne 2 ]]; then
+  echo "Usage: $0 <vSEMVER-tag> <expected-signer-sha256>" >&2
+  exit 2
+fi
+
+TAG=$1
+EXPECTED_SIGNER_SHA256=$2
+APK=app/build/outputs/apk/release/app-release.apk
+METADATA=app/build/outputs/apk/release/output-metadata.json
+
+[[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]] || {
+  echo "Release tag is not SemVer: $TAG" >&2
+  exit 1
+}
+
+VERSION=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["elements"][0]["versionName"])' "$METADATA")
+VERSION_CODE=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["elements"][0]["versionCode"])' "$METADATA")
+[[ "$VERSION_CODE" =~ ^[1-9][0-9]*$ ]]
+
+test "$TAG" = "v$VERSION" || {
+  echo "Tag $TAG does not match APK version v$VERSION" >&2
+  exit 1
+}
+
+APKSIGNER="$ANDROID_HOME/build-tools/34.0.0/apksigner"
+AAPT="$ANDROID_HOME/build-tools/34.0.0/aapt"
+"$APKSIGNER" verify --verbose "$APK"
+ACTUAL_SIGNER=$($APKSIGNER verify --print-certs "$APK" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')
+test "$ACTUAL_SIGNER" = "$EXPECTED_SIGNER_SHA256" || {
+  echo "Unexpected APK signer: $ACTUAL_SIGNER" >&2
+  exit 1
+}
+
+"$AAPT" dump badging "$APK" | grep -q "package: name='com.glasspb.scoreboard' versionCode='$VERSION_CODE' versionName='$VERSION'"
+! "$AAPT" dump permissions "$APK" | grep -q 'android.permission.INTERNET'
+
+printf 'Verified %s (version %s, code %s, signer %s)\n' "$APK" "$VERSION" "$VERSION_CODE" "$ACTUAL_SIGNER"
